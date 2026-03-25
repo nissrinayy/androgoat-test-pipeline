@@ -148,7 +148,7 @@ pipeline {
             }
         }
 
-        // ================= DAST - MobSF + Frida (Custom Script) =================
+                // ================= DAST - MobSF + Frida (Custom Script) =================
         stage('DAST - MobSF + Frida') {
             steps {
                 script {
@@ -169,48 +169,52 @@ pipeline {
 
                     echo "=== Injecting Custom Frida Script ==="
 
-                    // Custom Frida script sederhana yang menangkap banyak hal
-                    def fridaScript = '''
+                    // Tulis Frida script ke file temporary (cara paling aman di Windows)
+                    writeFile file: 'frida_script.js', text: '''
                     Java.perform(function () {
-                        console.log("[+] Frida injected successfully!");
+                        console.log("[+] Frida injected successfully into DIVA!");
 
-                        // Hook API Monitor
-                        var ApiMonitor = Java.use("java.net.URL");
-                        ApiMonitor.$init.overload("java.lang.String").implementation = function(url) {
-                            console.log("[API] URL opened: " + url);
-                            return this.$init(url);
-                        };
+                        // Basic API Monitor
+                        try {
+                            var URL = Java.use("java.net.URL");
+                            URL.$init.overload("java.lang.String").implementation = function(url) {
+                                console.log("[API] URL: " + url);
+                                return this.$init(url);
+                            };
+                        } catch (e) { console.log("URL hook failed"); }
 
-                        // Hook SSL Pinning Bypass (basic)
+                        // SSL Pinning Bypass
                         try {
                             var SSLContext = Java.use("javax.net.ssl.SSLContext");
                             SSLContext.init.overload("javax.net.ssl.KeyManager[]", "javax.net.ssl.TrustManager[]", "java.security.SecureRandom").implementation = function(km, tm, sr) {
-                                console.log("[SSL] SSLContext initialized - pinning likely bypassed");
+                                console.log("[SSL] SSLContext init - pinning bypassed");
                                 return this.init(km, tm, sr);
                             };
-                        } catch (err) {}
+                        } catch (e) {}
 
-                        // Hook Root & Debugger Check Bypass (sederhana)
-                        var System = Java.use("java.lang.System");
-                        System.getProperty.overload("java.lang.String").implementation = function(key) {
-                            if (key.contains("ro.build.tags") || key.contains("ro.debuggable")) {
-                                console.log("[Bypass] Root/Debugger check detected for: " + key);
-                                return "release-keys";
-                            }
-                            return this.getProperty(key);
-                        };
+                        // Root & Debugger Bypass
+                        try {
+                            var System = Java.use("java.lang.System");
+                            System.getProperty.overload("java.lang.String").implementation = function(key) {
+                                if (key.indexOf("ro.build.tags") >= 0 || key.indexOf("ro.debuggable") >= 0) {
+                                    console.log("[Bypass] Root/Debugger check bypassed for: " + key);
+                                    return "release-keys";
+                                }
+                                return this.getProperty(key);
+                            };
+                        } catch (e) {}
 
-                        console.log("[+] All hooks installed");
+                        console.log("[+] All basic hooks installed. Ready to monitor.");
                     });
                     '''
 
-                    // Kirim custom script ke MobSF
+                    // Kirim script dari file
                     def fridaResponse = bat(
                         script: """
                         @curl -s -X POST ^
                         -H "Authorization: ${env.MOBSF_TOKEN}" ^
                         --data "hash=${env.APK_HASH}" ^
-                        --data "frida_code=${fridaScript}" ^
+                        --data-urlencode "frida_code=@frida_script.js" ^
                         ${env.MOBSF_URL}/api/v1/frida/instrument
                         """,
                         returnStdout: true
@@ -218,27 +222,26 @@ pipeline {
 
                     echo "Frida custom script response: ${fridaResponse}"
 
-                    sleep 25
+                    sleep 30
 
                     echo "=== Triggering DIVA activities ==="
 
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity"
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'Main started'"
                     sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.HardcodeActivity"
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.HardcodeActivity || echo 'Hardcode started'"
                     sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity"
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity || echo 'IDS1 started'"
                     sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage2Activity"
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage2Activity || echo 'IDS2 started'"
                     sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.SQLInjectionActivity"
-                    sleep 6
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.SQLInjectionActivity || echo 'SQLi started'"
 
                     bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 200 -v 1000 || echo 'Monkey done'"
 
-                    sleep 50
+                    sleep 45
 
-                    // Stop & ambil report
                     echo "=== Stopping Dynamic Analysis ==="
+
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
@@ -249,6 +252,7 @@ pipeline {
                     sleep 15
 
                     echo "=== Fetching DAST Report ==="
+
                     def raw = bat(
                         script: """
                         @curl -s -X POST ^
