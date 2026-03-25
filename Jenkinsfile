@@ -156,9 +156,6 @@ pipeline {
             steps {
                 script {
 
-                    bat "adb shell input keyevent 82"
-                    sleep 8
-
                     echo "=== Starting Dynamic Analysis ==="
 
                     bat """
@@ -168,54 +165,44 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/start_analysis
                     """
 
-                    sleep 45
+                    sleep 50
 
-                    echo "=== Instrumenting Frida with 4 hooks (api_monitor, ssl_pinning_bypass, root_bypass, debugger_check_bypass) ==="
+                    echo "=== Instrumenting Frida - 4 hooks exact ==="
 
-                    // Cara paling reliable untuk MobSF Frida API
-                    bat """
-                    @curl -s -X POST ^
-                    -H "Authorization: ${env.MOBSF_TOKEN}" ^
-                    -d "hash=${env.APK_HASH}" ^
-                    -d "default_hooks=api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass" ^
-                    ${env.MOBSF_URL}/api/v1/frida/instrument
-                    """
-
-                    sleep 20
-
-                    echo "=== Triggering AndroGoat activities ==="
-
-                    // Launch beberapa activity vulnerable AndroGoat secara eksplisit
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'MainActivity running'"
-                    sleep 8
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.RootDetectionActivity || echo 'RootDetection started'"
-                    sleep 5
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureStorageSQLiteActivity || echo 'SQLite activity started'"
-                    sleep 5
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureStorageSharedPrefsActivity || echo 'SharedPrefs activity started'"
-                    sleep 5
-
-                    // Monkey sebagai tambahan
-                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 250 -v 1200 || echo 'Monkey finished'"
-
-                    sleep 35
-
-                    echo "=== Running TLS Tests ==="
-
-                    def tlsRaw = bat(
+                    // Versi paling reliable untuk MobSF di Windows
+                    def fridaResponse = bat(
                         script: """
                         @curl -s -X POST ^
                         -H "Authorization: ${env.MOBSF_TOKEN}" ^
-                        --data "hash=${env.APK_HASH}" ^
-                        ${env.MOBSF_URL}/api/v1/android/tls_tests
+                        -d "hash=${env.APK_HASH}" ^
+                        -d "default_hooks=api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass" ^
+                        ${env.MOBSF_URL}/api/v1/frida/instrument
                         """,
                         returnStdout: true
                     ).trim()
 
-                    def tlsJson = cleanJsonString(tlsRaw)
-                    if (tlsJson) {
-                        writeFile file: 'tls_report.json', text: tlsJson
-                    }
+                    echo "Frida instrument response: ${fridaResponse}"
+
+                    sleep 25
+
+                    echo "=== Triggering vulnerable activities in AndroGoat ==="
+
+                    // Trigger activity vulnerable secara langsung (sangat penting!)
+                    bat "adb shell am start -n owasp.sat.agoat/.RootDetectionActivity"
+                    sleep 6
+                    bat "adb shell am start -n owasp.sat.agoat/.InsecureStorageSQLiteActivity"
+                    sleep 6
+                    bat "adb shell am start -n owasp.sat.agoat/.InsecureStorageSharedPrefs1Activity"
+                    sleep 6
+                    bat "adb shell am start -n owasp.sat.agoat/.SQLinjectionActivity"
+                    sleep 6
+                    bat "adb shell am start -n owasp.sat.agoat/.InsecureLoggingActivity"
+                    sleep 6
+
+                    // Monkey sebagai backup
+                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 200 -v 800 || echo 'Monkey done'"
+
+                    sleep 40
 
                     echo "=== Stopping Dynamic Analysis ==="
 
@@ -228,7 +215,7 @@ pipeline {
 
                     sleep 15
 
-                    echo "=== Fetching final DAST report ==="
+                    echo "=== Fetching DAST Report ==="
 
                     def raw = bat(
                         script: """
@@ -243,15 +230,13 @@ pipeline {
                     def json = cleanJsonString(raw)
                     if (json) {
                         writeFile file: 'dast_report.json', text: json
-                        archiveArtifacts artifacts: 'dast_report.json, tls_report.json', allowEmptyArchive: true
-                        echo "✅ DAST selesai. Silakan cek dast_report.json untuk apimon dan droidmon"
-                    } else {
-                        echo "⚠️ Gagal parse report JSON"
+                        archiveArtifacts artifacts: 'dast_report.json', allowEmptyArchive: true
+                        echo "✅ DAST finished. Check dast_report.json"
                     }
                 }
             }
         }
-
+        
         // ================= METRICS (FOR PAPER) =================
         stage('Extract Metrics') {
             steps {
