@@ -150,18 +150,17 @@ pipeline {
         }
 
 
-        // ================= DAST =================
-        stage('DAST - MobSF + Frida') {
+        // ================= DAST - MobSF + Frida =================
+        stage('DAST') {
             steps {
                 script {
 
-                    // Pastikan emulator siap dan app sudah terbuka
                     bat "adb shell input keyevent 82"
                     sleep 8
 
-                    echo "=== Starting Dynamic Analysis (DAST) ==="
+                    echo "=== Starting Dynamic Analysis ==="
 
-                    // 1. Start dynamic analysis di MobSF
+                    // Start dynamic analysis
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
@@ -169,39 +168,35 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/start_analysis
                     """
 
-                    sleep 40   // waktu lebih lama agar environment Frida siap penuh
+                    sleep 45
 
-                    echo "=== Instrumenting Frida dengan EXACT 4 hooks (sesuai paper) ==="
+                    echo "=== Instrumenting Frida (4 hooks exact) ==="
 
-                    // 2. Instrument Frida → HANYA 4 hooks yang kamu mau
+                    // Perbaikan utama: gunakan --data-urlencode supaya parameter terkirim benar
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
-                    --data "hash=${env.APK_HASH}&default_hooks=api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass" ^
+                    --data-urlencode "hash=${env.APK_HASH}" ^
+                    --data-urlencode "default_hooks=api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass" ^
                     ${env.MOBSF_URL}/api/v1/frida/instrument
                     """
 
-                    sleep 15
+                    sleep 18
 
-                    echo "=== Triggering AndroGoat behavior (lebih agresif) ==="
+                    echo "=== Triggering AndroGoat (lebih agresif) ==="
 
-                    // Launch MainActivity secara eksplisit
                     bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'MainActivity already running'"
-
                     sleep 10
 
-                    // Buka menu & beberapa interaksi dasar
                     bat "adb shell input keyevent 82"
                     sleep 5
 
-                    // Monkey test dengan parameter yang lebih baik untuk AndroGoat
-                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 350 -v 800 || echo 'Monkey test selesai'"
+                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 300 -v 1000 || echo 'Monkey finished'"
 
-                    sleep 25   // beri waktu cukup lama agar semua hook menangkap aktivitas
+                    sleep 30   // beri waktu hooks menangkap aktivitas
 
                     echo "=== Running TLS Tests ==="
 
-                    // TLS test
                     def tlsRaw = bat(
                         script: """
                         @curl -s -X POST ^
@@ -215,12 +210,10 @@ pipeline {
                     def tlsJson = cleanJsonString(tlsRaw)
                     if (tlsJson) {
                         writeFile file: 'tls_report.json', text: tlsJson
-                        echo "TLS report saved"
                     }
 
                     echo "=== Stopping Dynamic Analysis ==="
 
-                    // Stop analysis
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
@@ -228,11 +221,10 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/stop_analysis
                     """
 
-                    sleep 12
+                    sleep 15
 
-                    echo "=== Fetching final DAST report ==="
+                    echo "=== Fetching DAST Report ==="
 
-                    // Ambil report JSON
                     def raw = bat(
                         script: """
                         @curl -s -X POST ^
@@ -247,9 +239,9 @@ pipeline {
                     if (json) {
                         writeFile file: 'dast_report.json', text: json
                         archiveArtifacts artifacts: 'dast_report.json, tls_report.json', allowEmptyArchive: true
-                        echo "✅ DAST selesai - Report diarsipkan (apimon, frida_logs, dll seharusnya sudah terisi)"
+                        echo "✅ DAST finished - Check dast_report.json for apimon & frida_logs"
                     } else {
-                        echo "⚠️ Warning: Gagal parse report JSON"
+                        echo "⚠️ Could not parse report"
                     }
                 }
             }
