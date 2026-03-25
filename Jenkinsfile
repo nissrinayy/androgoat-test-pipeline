@@ -155,10 +155,13 @@ pipeline {
             steps {
                 script {
 
+                    // Pastikan emulator siap dan app sudah terbuka
                     bat "adb shell input keyevent 82"
-                    sleep 2
+                    sleep 8
 
-                    // start dynamic
+                    echo "=== Starting Dynamic Analysis (DAST) ==="
+
+                    // 1. Start dynamic analysis di MobSF
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
@@ -166,9 +169,11 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/start_analysis
                     """
 
-                    sleep 20
+                    sleep 40   // waktu lebih lama agar environment Frida siap penuh
 
-                    // frida hooks
+                    echo "=== Instrumenting Frida dengan EXACT 4 hooks (sesuai paper) ==="
+
+                    // 2. Instrument Frida → HANYA 4 hooks yang kamu mau
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
@@ -176,8 +181,25 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/frida/instrument
                     """
 
-                    // trigger app behavior
-                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 1000 -v 300"
+                    sleep 15
+
+                    echo "=== Triggering AndroGoat behavior (lebih agresif) ==="
+
+                    // Launch MainActivity secara eksplisit
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'MainActivity already running'"
+
+                    sleep 10
+
+                    // Buka menu & beberapa interaksi dasar
+                    bat "adb shell input keyevent 82"
+                    sleep 5
+
+                    // Monkey test dengan parameter yang lebih baik untuk AndroGoat
+                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 350 -v 800 || echo 'Monkey test selesai'"
+
+                    sleep 25   // beri waktu cukup lama agar semua hook menangkap aktivitas
+
+                    echo "=== Running TLS Tests ==="
 
                     // TLS test
                     def tlsRaw = bat(
@@ -193,9 +215,12 @@ pipeline {
                     def tlsJson = cleanJsonString(tlsRaw)
                     if (tlsJson) {
                         writeFile file: 'tls_report.json', text: tlsJson
+                        echo "TLS report saved"
                     }
 
-                    // stop
+                    echo "=== Stopping Dynamic Analysis ==="
+
+                    // Stop analysis
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
@@ -203,7 +228,11 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/stop_analysis
                     """
 
-                    // get report
+                    sleep 12
+
+                    echo "=== Fetching final DAST report ==="
+
+                    // Ambil report JSON
                     def raw = bat(
                         script: """
                         @curl -s -X POST ^
@@ -218,7 +247,9 @@ pipeline {
                     if (json) {
                         writeFile file: 'dast_report.json', text: json
                         archiveArtifacts artifacts: 'dast_report.json, tls_report.json', allowEmptyArchive: true
-                        echo "✅ DAST done"
+                        echo "✅ DAST selesai - Report diarsipkan (apimon, frida_logs, dll seharusnya sudah terisi)"
+                    } else {
+                        echo "⚠️ Warning: Gagal parse report JSON"
                     }
                 }
             }
