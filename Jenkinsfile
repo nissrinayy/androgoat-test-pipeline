@@ -26,13 +26,13 @@ pipeline {
         PATH = "${JAVA_HOME}\\bin;${ANDROID_HOME}\\platform-tools;${ANDROID_HOME}\\emulator;${env.PATH}"
 
         AVD_NAME     = "Pixel_4_XL"
-        
-        // ================== DIVA ==================
-        APK_PATH     = "test-apk\\diva.apk"          // pastikan file ini ada
-        APP_PACKAGE  = "jakhar.aseem.diva"
 
-        MOBSF_URL   = "http://localhost:8000"
-        MOBSF_TOKEN = "67f8dcdbaf63751750653685407053c3e1762a3394c5833de1d00379ca06c0fe"
+        // ================== InsecureBankv2 ==================
+        APK_PATH     = "test-apk\\InsecureBankv2.apk"
+        APP_PACKAGE  = "insecurebankv2.dineshshetty"
+
+        MOBSF_URL    = "http://localhost:8000"
+        MOBSF_TOKEN  = "67f8dcdbaf63751750653685407053c3e1762a3394c5833de1d00379ca06c0fe"
     }
 
     stages {
@@ -65,7 +65,7 @@ pipeline {
         stage('SAST - MobSF') {
             steps {
                 script {
-                    echo "Uploading APK to MobSF..."
+                    echo "Uploading InsecureBankv2 APK to MobSF..."
 
                     def uploadResponse = bat(
                         script: """
@@ -102,15 +102,15 @@ pipeline {
 
                     def json = cleanJsonString(raw)
                     if (json) {
-                        writeFile file: 'sast_report.json', text: json
-                        archiveArtifacts artifacts: 'sast_report.json'
+                        writeFile file: 'sast_report_insecurebank.json', text: json
+                        archiveArtifacts artifacts: 'sast_report_insecurebank.json'
                         echo "✅ SAST done"
                     }
                 }
             }
         }
 
-        // ================= START EMULATOR (dikembalikan seperti asli) =================
+        // ================= START EMULATOR =================
         stage('Start Emulator') {
             steps {
                 bat """
@@ -118,7 +118,6 @@ pipeline {
                 -avd "${env.AVD_NAME}" ^
                 -no-window -no-audio -gpu swiftshader_indirect -wipe-data
                 """
-
                 sleep 60
                 bat "adb wait-for-device"
                 bat "adb shell getprop sys.boot_completed"
@@ -126,13 +125,13 @@ pipeline {
             }
         }
 
-        // ================= INSTALL APK (sudah disesuaikan DIVA) =================
+        // ================= INSTALL APK =================
         stage('Install APK') {
             steps {
                 script {
                     def timestamp  = new Date().format("dd-MM-yyyy_HH-mm-ss")
                     def sourcePath = env.APK_PATH
-                    def destPath   = "apk-outputs\\diva-${timestamp}.apk"
+                    def destPath   = "apk-outputs\\InsecureBankv2-${timestamp}.apk"
 
                     if (!fileExists(sourcePath)) {
                         error "❌ Source APK not found: ${sourcePath}"
@@ -143,20 +142,16 @@ pipeline {
                     bat(script: "adb uninstall ${env.APP_PACKAGE}", returnStatus: true)
 
                     bat "adb install -r \"${destPath}\""
-                    echo "✅ DIVA APK installed"
+                    echo "✅ InsecureBankv2 APK installed"
                 }
             }
         }
 
-                // ================= DAST - MobSF + Frida (Custom Script) =================
-        stage('DAST - MobSF + Frida') {
+        // ================= DAST - MobSF =================
+        stage('DAST') {
             steps {
                 script {
-
-                    bat "adb shell input keyevent 82"
-                    sleep 10
-
-                    echo "=== Starting Dynamic Analysis for DIVA ==="
+                    echo "=== Starting Dynamic Analysis for InsecureBankv2 ==="
 
                     bat """
                     @curl -s -X POST ^
@@ -165,70 +160,13 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/start_analysis
                     """
 
-                    sleep 40
-
-                    echo "=== Injecting Custom Frida Script ==="
-
-                    // Tulis Frida script ke file temporary (cara paling aman di Windows)
-                    writeFile file: 'frida_script.js', text: '''
-                    Java.perform(function () {
-                        console.log("[+] Frida injected successfully into DIVA!");
-
-                        // Basic API Monitor
-                        try {
-                            var URL = Java.use("java.net.URL");
-                            URL.$init.overload("java.lang.String").implementation = function(url) {
-                                console.log("[API] URL: " + url);
-                                return this.$init(url);
-                            };
-                        } catch (e) { console.log("URL hook failed"); }
-
-                        // SSL Pinning Bypass
-                        try {
-                            var SSLContext = Java.use("javax.net.ssl.SSLContext");
-                            SSLContext.init.overload("javax.net.ssl.KeyManager[]", "javax.net.ssl.TrustManager[]", "java.security.SecureRandom").implementation = function(km, tm, sr) {
-                                console.log("[SSL] SSLContext init - pinning bypassed");
-                                return this.init(km, tm, sr);
-                            };
-                        } catch (e) {}
-
-                        // Root & Debugger Bypass
-                        try {
-                            var System = Java.use("java.lang.System");
-                            System.getProperty.overload("java.lang.String").implementation = function(key) {
-                                if (key.indexOf("ro.build.tags") >= 0 || key.indexOf("ro.debuggable") >= 0) {
-                                    console.log("[Bypass] Root/Debugger check bypassed for: " + key);
-                                    return "release-keys";
-                                }
-                                return this.getProperty(key);
-                            };
-                        } catch (e) {}
-
-                        console.log("[+] All basic hooks installed. Ready to monitor.");
-                    });
-                    '''
-
-                    // Kirim script dari file
-                    def fridaResponse = bat(
-                        script: """
-                        @curl -s -X POST ^
-                        -H "Authorization: ${env.MOBSF_TOKEN}" ^
-                        --data "hash=${env.APK_HASH}" ^
-                        --data-urlencode "frida_code=@frida_script.js" ^
-                        ${env.MOBSF_URL}/api/v1/frida/instrument
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    echo "Frida custom script response: ${fridaResponse}"
-
                     sleep 30
 
-                    echo "=== Triggering DIVA activities ==="
+                    echo "=== Triggering InsecureBankv2 activities ==="
 
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'Main started'"
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'MainActivity started'"
                     sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.HardcodeActivity || echo 'Hardcode started'"
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.HardcodeActivity || echo 'HardcodeActivity started'"
                     sleep 6
                     bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity || echo 'IDS1 started'"
                     sleep 6
@@ -265,27 +203,27 @@ pipeline {
 
                     def json = cleanJsonString(raw)
                     if (json) {
-                        writeFile file: 'dast_report.json', text: json
-                        archiveArtifacts artifacts: 'dast_report.json, tls_report.json', allowEmptyArchive: true
-                        echo "✅ DAST finished - Check dast_report.json"
+                        writeFile file: 'dast_report_insecurebank.json', text: json
+                        archiveArtifacts artifacts: 'dast_report_insecurebank.json'
+                        echo "✅ DAST finished"
                     }
                 }
             }
         }
 
-        // ================= METRICS (FOR PAPER) =================
+        // ================= METRICS =================
         stage('Extract Metrics') {
             steps {
                 script {
-                    bat 'del /f /q dast_results.csv || echo no old file'
-                    writeFile file: 'dast_results.csv', text: """
+                    bat 'del /f /q dast_results_insecurebank.csv || echo no old file'
+                    writeFile file: 'dast_results_insecurebank.csv', text: """
 hook,description
 api_monitor,intercepts API calls
 ssl_pinning_bypass,bypass SSL pinning
 root_bypass,detect root checks
 debugger_check_bypass,detect debugger
 """
-                    archiveArtifacts artifacts: 'dast_results.csv'
+                    archiveArtifacts artifacts: 'dast_results_insecurebank.csv'
                     echo "✅ Metrics ready for paper"
                 }
             }
