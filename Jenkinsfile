@@ -45,7 +45,13 @@ pipeline {
                 }
             }
         }
-
+        // ================= PREPARE WORKSPACE =================
+        stage('Prepare Workspace') {
+            steps {
+                bat 'if not exist apk-outputs mkdir apk-outputs'
+                echo "✅ Workspace ready"
+            }
+        }
         // ================= SAST =================
         stage('SAST - MobSF') {
             steps {
