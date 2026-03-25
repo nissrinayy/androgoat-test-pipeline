@@ -148,13 +148,13 @@ pipeline {
             }
         }
 
-        // ================= DAST - MobSF + Frida (untuk DIVA) =================
+        // ================= DAST - MobSF + Frida (DIVA) =================
         stage('DAST - MobSF + Frida') {
             steps {
                 script {
 
                     bat "adb shell input keyevent 82"
-                    sleep 8
+                    sleep 10
 
                     echo "=== Starting Dynamic Analysis for DIVA ==="
 
@@ -165,40 +165,44 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/start_analysis
                     """
 
-                    sleep 45
+                    sleep 50
 
-                    echo "=== Instrumenting Frida with 4 hooks ==="
+                    echo "=== Instrumenting Frida (4 hooks) ==="
 
+                    // Cara paling stabil untuk MobSF di Windows
                     def fridaResponse = bat(
                         script: """
                         @curl -s -X POST ^
                         -H "Authorization: ${env.MOBSF_TOKEN}" ^
-                        -d "hash=${env.APK_HASH}" ^
-                        -d "default_hooks=api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass" ^
+                        --data "hash=${env.APK_HASH}&default_hooks=api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass" ^
                         ${env.MOBSF_URL}/api/v1/frida/instrument
                         """,
                         returnStdout: true
                     ).trim()
 
-                    echo "Frida instrument response: ${fridaResponse}"
+                    echo "=== Frida Response: ${fridaResponse} ==="
 
-                    sleep 25
+                    sleep 30
 
                     echo "=== Triggering DIVA vulnerable activities ==="
 
+                    // Trigger activity yang benar di DIVA
                     bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'Main started'"
-                    sleep 6
+                    sleep 8
                     bat "adb shell am start -n ${env.APP_PACKAGE}/.HardcodeActivity || echo 'Hardcode started'"
-                    sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity || echo 'InsecureStorage1 started'"
-                    sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage2Activity || echo 'InsecureStorage2 started'"
-                    sleep 6
+                    sleep 8
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity || echo 'IDS1 started'"
+                    sleep 8
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage2Activity || echo 'IDS2 started'"
+                    sleep 8
                     bat "adb shell am start -n ${env.APP_PACKAGE}/.SQLInjectionActivity || echo 'SQLi started'"
+                    sleep 8
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InputValidation1Activity || echo 'InputVal started'"
 
-                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 250 -v 800 || echo 'Monkey finished'"
+                    // Monkey lebih lama
+                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 200 -v 1200 || echo 'Monkey finished'"
 
-                    sleep 40
+                    sleep 45
 
                     echo "=== Running TLS Tests ==="
 
@@ -226,7 +230,7 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/stop_analysis
                     """
 
-                    sleep 15
+                    sleep 20
 
                     echo "=== Fetching DAST Report ==="
 
@@ -244,7 +248,9 @@ pipeline {
                     if (json) {
                         writeFile file: 'dast_report.json', text: json
                         archiveArtifacts artifacts: 'dast_report.json, tls_report.json', allowEmptyArchive: true
-                        echo "✅ DAST DIVA selesai"
+                        echo "✅ DAST finished"
+                    } else {
+                        echo "⚠️ Failed to parse report"
                     }
                 }
             }
