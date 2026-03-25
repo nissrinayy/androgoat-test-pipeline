@@ -114,11 +114,21 @@ pipeline {
         // ================= INSTALL APK =================
         stage('Install APK') {
             steps {
-                bat """
-                adb uninstall ${env.APP_PACKAGE} || echo "App not installed, skip uninstall"
-                """
-                bat "adb install -r ${env.APK_PATH}"
-                echo "✅ APK installed"
+                script {
+                    def timestamp  = new Date().format("dd-MM-yyyy_HH-mm-ss")
+                    def sourcePath = env.APK_PATH
+                    def destPath   = "apk-outputs\\androgoat-${timestamp}.apk"
+
+                    bat "copy \"${sourcePath}\" \"${destPath}\""
+
+                    // SAFE UNINSTALL (tidak bikin pipeline fail)
+                    bat(script: "adb uninstall ${env.APP_PACKAGE}", returnStatus: true)
+
+                    // INSTALL APK
+                    bat "adb install -r \"${destPath}\""
+
+                    echo "✅ APK installed"
+                }
             }
         }
 
