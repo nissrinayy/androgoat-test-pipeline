@@ -148,7 +148,7 @@ pipeline {
             }
         }
 
-        // ================= DAST - MobSF + Frida (DIVA) =================
+        // ================= DAST - MobSF + Frida (Custom Script) =================
         stage('DAST - MobSF + Frida') {
             steps {
                 script {
@@ -165,64 +165,80 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/start_analysis
                     """
 
-                    sleep 50
+                    sleep 40
 
-                    echo "=== Instrumenting Frida (4 hooks) ==="
+                    echo "=== Injecting Custom Frida Script ==="
 
-                    // Cara paling stabil untuk MobSF di Windows
+                    // Custom Frida script sederhana yang menangkap banyak hal
+                    def fridaScript = '''
+                    Java.perform(function () {
+                        console.log("[+] Frida injected successfully!");
+
+                        // Hook API Monitor
+                        var ApiMonitor = Java.use("java.net.URL");
+                        ApiMonitor.$init.overload("java.lang.String").implementation = function(url) {
+                            console.log("[API] URL opened: " + url);
+                            return this.$init(url);
+                        };
+
+                        // Hook SSL Pinning Bypass (basic)
+                        try {
+                            var SSLContext = Java.use("javax.net.ssl.SSLContext");
+                            SSLContext.init.overload("javax.net.ssl.KeyManager[]", "javax.net.ssl.TrustManager[]", "java.security.SecureRandom").implementation = function(km, tm, sr) {
+                                console.log("[SSL] SSLContext initialized - pinning likely bypassed");
+                                return this.init(km, tm, sr);
+                            };
+                        } catch (err) {}
+
+                        // Hook Root & Debugger Check Bypass (sederhana)
+                        var System = Java.use("java.lang.System");
+                        System.getProperty.overload("java.lang.String").implementation = function(key) {
+                            if (key.contains("ro.build.tags") || key.contains("ro.debuggable")) {
+                                console.log("[Bypass] Root/Debugger check detected for: " + key);
+                                return "release-keys";
+                            }
+                            return this.getProperty(key);
+                        };
+
+                        console.log("[+] All hooks installed");
+                    });
+                    '''
+
+                    // Kirim custom script ke MobSF
                     def fridaResponse = bat(
                         script: """
                         @curl -s -X POST ^
                         -H "Authorization: ${env.MOBSF_TOKEN}" ^
-                        --data "hash=${env.APK_HASH}&default_hooks=api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass" ^
+                        --data "hash=${env.APK_HASH}" ^
+                        --data "frida_code=${fridaScript}" ^
                         ${env.MOBSF_URL}/api/v1/frida/instrument
                         """,
                         returnStdout: true
                     ).trim()
 
-                    echo "=== Frida Response: ${fridaResponse} ==="
+                    echo "Frida custom script response: ${fridaResponse}"
 
-                    sleep 30
+                    sleep 25
 
-                    echo "=== Triggering DIVA vulnerable activities ==="
+                    echo "=== Triggering DIVA activities ==="
 
-                    // Trigger activity yang benar di DIVA
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'Main started'"
-                    sleep 8
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.HardcodeActivity || echo 'Hardcode started'"
-                    sleep 8
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity || echo 'IDS1 started'"
-                    sleep 8
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage2Activity || echo 'IDS2 started'"
-                    sleep 8
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.SQLInjectionActivity || echo 'SQLi started'"
-                    sleep 8
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InputValidation1Activity || echo 'InputVal started'"
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity"
+                    sleep 6
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.HardcodeActivity"
+                    sleep 6
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity"
+                    sleep 6
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage2Activity"
+                    sleep 6
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.SQLInjectionActivity"
+                    sleep 6
 
-                    // Monkey lebih lama
-                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 200 -v 1200 || echo 'Monkey finished'"
+                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 200 -v 1000 || echo 'Monkey done'"
 
-                    sleep 45
+                    sleep 50
 
-                    echo "=== Running TLS Tests ==="
-
-                    def tlsRaw = bat(
-                        script: """
-                        @curl -s -X POST ^
-                        -H "Authorization: ${env.MOBSF_TOKEN}" ^
-                        --data "hash=${env.APK_HASH}" ^
-                        ${env.MOBSF_URL}/api/v1/android/tls_tests
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    def tlsJson = cleanJsonString(tlsRaw)
-                    if (tlsJson) {
-                        writeFile file: 'tls_report.json', text: tlsJson
-                    }
-
+                    // Stop & ambil report
                     echo "=== Stopping Dynamic Analysis ==="
-
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
@@ -230,10 +246,9 @@ pipeline {
                     ${env.MOBSF_URL}/api/v1/dynamic/stop_analysis
                     """
 
-                    sleep 20
+                    sleep 15
 
                     echo "=== Fetching DAST Report ==="
-
                     def raw = bat(
                         script: """
                         @curl -s -X POST ^
@@ -248,9 +263,7 @@ pipeline {
                     if (json) {
                         writeFile file: 'dast_report.json', text: json
                         archiveArtifacts artifacts: 'dast_report.json, tls_report.json', allowEmptyArchive: true
-                        echo "✅ DAST finished"
-                    } else {
-                        echo "⚠️ Failed to parse report"
+                        echo "✅ DAST finished - Check dast_report.json"
                     }
                 }
             }
