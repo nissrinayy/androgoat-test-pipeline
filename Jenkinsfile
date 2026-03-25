@@ -26,7 +26,7 @@ pipeline {
         PATH = "${JAVA_HOME}\\bin;${ANDROID_HOME}\\platform-tools;${ANDROID_HOME}\\emulator;${env.PATH}"
 
         AVD_NAME     = "Pixel_4_XL"
-        APK_PATH     = "test-apk/AndroGoat.apk"
+        APK_PATH     = "test-apk\\AndroGoat.apk"
         APP_PACKAGE  = "owasp.satish.androgoat"
 
         MOBSF_URL   = "http://localhost:8000"
@@ -50,6 +50,12 @@ pipeline {
             steps {
                 bat 'if not exist apk-outputs mkdir apk-outputs'
                 echo "✅ Workspace ready"
+            }
+        }
+        // ================= DEBUG FILES =================
+        stage('List Workspace Files') {
+            steps {
+                bat 'dir /s /b'
             }
         }
         // ================= SAST =================
@@ -125,18 +131,24 @@ pipeline {
                     def sourcePath = env.APK_PATH
                     def destPath   = "apk-outputs\\androgoat-${timestamp}.apk"
 
+                    // pastikan file ada sebelum copy
+                    if (!fileExists(sourcePath)) {
+                        error "❌ Source APK not found: ${sourcePath}"
+                    }
+
+                    // copy APK ke folder outputs
                     bat "copy \"${sourcePath}\" \"${destPath}\""
 
-                    // SAFE UNINSTALL (tidak bikin pipeline fail)
+                    // uninstall (jangan fail pipeline)
                     bat(script: "adb uninstall ${env.APP_PACKAGE}", returnStatus: true)
 
-                    // INSTALL APK
+                    // install APK
                     bat "adb install -r \"${destPath}\""
-
                     echo "✅ APK installed"
                 }
             }
         }
+
 
         // ================= DAST =================
         stage('DAST - MobSF + Frida') {
