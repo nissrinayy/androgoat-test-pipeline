@@ -34,8 +34,6 @@ pipeline {
     }
 
     stages {
-
-
         // ================= VALIDATE APK =================
         stage('Validate APK') {
             steps {
