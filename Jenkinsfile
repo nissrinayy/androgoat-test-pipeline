@@ -28,7 +28,7 @@ pipeline {
         AVD_NAME     = "Pixel_4_XL"
         
         // ================== DIVA ==================
-        APK_PATH     = "test-apk\\diva.apk"      // pastikan nama file sesuai
+        APK_PATH     = "test-apk\\diva.apk"          // pastikan file ini ada
         APP_PACKAGE  = "jakhar.aseem.diva"
 
         MOBSF_URL   = "http://localhost:8000"
@@ -36,6 +36,7 @@ pipeline {
     }
 
     stages {
+        // ================= VALIDATE APK =================
         stage('Validate APK') {
             steps {
                 script {
@@ -54,7 +55,62 @@ pipeline {
             }
         }
 
-        // ================= START EMULATOR (Diperbaiki) =================
+        stage('List Workspace Files') {
+            steps {
+                bat 'dir /s /b'
+            }
+        }
+
+        // ================= SAST =================
+        stage('SAST - MobSF') {
+            steps {
+                script {
+                    echo "Uploading APK to MobSF..."
+
+                    def uploadResponse = bat(
+                        script: """
+                        @curl -s ^
+                        -H "Authorization: ${env.MOBSF_TOKEN}" ^
+                        -F "file=@${env.APK_PATH}" ^
+                        ${env.MOBSF_URL}/api/v1/upload
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    def apkHash = extractHashFromResponse(uploadResponse)
+                    if (!apkHash) error "❌ Upload failed"
+
+                    env.APK_HASH = apkHash
+                    echo "APK HASH: ${apkHash}"
+
+                    bat """
+                    @curl -s -X POST ^
+                    -H "Authorization: ${env.MOBSF_TOKEN}" ^
+                    --data "hash=${apkHash}" ^
+                    ${env.MOBSF_URL}/api/v1/scan
+                    """
+
+                    def raw = bat(
+                        script: """
+                        @curl -s -X POST ^
+                        -H "Authorization: ${env.MOBSF_TOKEN}" ^
+                        --data "hash=${apkHash}" ^
+                        ${env.MOBSF_URL}/api/v1/report_json
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    def json = cleanJsonString(raw)
+                    if (json) {
+                        writeFile file: 'sast_report.json', text: json
+                        archiveArtifacts artifacts: 'sast_report.json'
+                        echo "✅ SAST done"
+                    }
+                }
+            }
+        }
+
+        // ================= START EMULATOR (dikembalikan seperti asli) =================
         stage('Start Emulator') {
             steps {
                 bat """
@@ -63,50 +119,40 @@ pipeline {
                 -no-window -no-audio -gpu swiftshader_indirect -wipe-data
                 """
 
-                echo "Emulator starting... waiting for full boot (max 5 menit)"
-
-                script {
-                    def booted = false
-                    for (int i = 0; i < 30; i++) {   // max ~5 menit
-                        def status = bat(script: "adb shell getprop sys.boot_completed", returnStdout: true).trim()
-                        if (status == "1") {
-                            booted = true
-                            echo "✅ Emulator fully booted"
-                            break
-                        }
-                        echo "Waiting for boot... (${i+1}/30)"
-                        sleep 10
-                    }
-                    if (!booted) {
-                        error "❌ Emulator boot timeout. Coba jalankan Cold Boot Now di AVD Manager manual."
-                    }
-                }
+                sleep 60
+                bat "adb wait-for-device"
+                bat "adb shell getprop sys.boot_completed"
+                echo "✅ Emulator ready"
             }
         }
 
+        // ================= INSTALL APK (sudah disesuaikan DIVA) =================
         stage('Install APK') {
             steps {
                 script {
-                    def timestamp = new Date().format("dd-MM-yyyy_HH-mm-ss")
+                    def timestamp  = new Date().format("dd-MM-yyyy_HH-mm-ss")
+                    def sourcePath = env.APK_PATH
                     def destPath   = "apk-outputs\\diva-${timestamp}.apk"
 
-                    bat "copy \"${env.APK_PATH}\" \"${destPath}\""
+                    if (!fileExists(sourcePath)) {
+                        error "❌ Source APK not found: ${sourcePath}"
+                    }
+
+                    bat "copy \"${sourcePath}\" \"${destPath}\""
 
                     bat(script: "adb uninstall ${env.APP_PACKAGE}", returnStatus: true)
 
-                    def installResult = bat(script: "adb install -r \"${destPath}\"", returnStatus: true)
-                    if (installResult != 0) {
-                        error "❌ Install APK failed"
-                    }
+                    bat "adb install -r \"${destPath}\""
                     echo "✅ DIVA APK installed"
                 }
             }
         }
 
-        // ================= DAST - MobSF + Frida =================
+        // ================= DAST - MobSF + Frida (untuk DIVA) =================
         stage('DAST - MobSF + Frida') {
             steps {
                 script {
+
                     bat "adb shell input keyevent 82"
                     sleep 8
 
@@ -138,26 +184,41 @@ pipeline {
 
                     sleep 25
 
-                    echo "=== Triggering DIVA activities ==="
+                    echo "=== Triggering DIVA vulnerable activities ==="
 
                     bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'Main started'"
-                    sleep 5
+                    sleep 6
                     bat "adb shell am start -n ${env.APP_PACKAGE}/.HardcodeActivity || echo 'Hardcode started'"
-                    sleep 5
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity || echo 'IDS1 started'"
-                    sleep 5
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage2Activity || echo 'IDS2 started'"
-                    sleep 5
+                    sleep 6
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity || echo 'InsecureStorage1 started'"
+                    sleep 6
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage2Activity || echo 'InsecureStorage2 started'"
+                    sleep 6
                     bat "adb shell am start -n ${env.APP_PACKAGE}/.SQLInjectionActivity || echo 'SQLi started'"
 
-                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 250 -v 800 || echo 'Monkey done'"
+                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 250 -v 800 || echo 'Monkey finished'"
 
                     sleep 40
 
-                    // TLS Tests, Stop, dan Fetch Report (sama seperti sebelumnya)
-                    // ... (copy bagian TLS, stop_analysis, dan fetch report dari kode kamu yang lama)
+                    echo "=== Running TLS Tests ==="
+
+                    def tlsRaw = bat(
+                        script: """
+                        @curl -s -X POST ^
+                        -H "Authorization: ${env.MOBSF_TOKEN}" ^
+                        --data "hash=${env.APK_HASH}" ^
+                        ${env.MOBSF_URL}/api/v1/android/tls_tests
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    def tlsJson = cleanJsonString(tlsRaw)
+                    if (tlsJson) {
+                        writeFile file: 'tls_report.json', text: tlsJson
+                    }
 
                     echo "=== Stopping Dynamic Analysis ==="
+
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
@@ -168,6 +229,7 @@ pipeline {
                     sleep 15
 
                     echo "=== Fetching DAST Report ==="
+
                     def raw = bat(
                         script: """
                         @curl -s -X POST ^
@@ -188,21 +250,25 @@ pipeline {
             }
         }
 
+        // ================= METRICS (FOR PAPER) =================
         stage('Extract Metrics') {
             steps {
                 script {
                     bat 'del /f /q dast_results.csv || echo no old file'
-                    writeFile file: 'dast_results.csv', text: """hook,description
+                    writeFile file: 'dast_results.csv', text: """
+hook,description
 api_monitor,intercepts API calls
 ssl_pinning_bypass,bypass SSL pinning
 root_bypass,detect root checks
-debugger_check_bypass,detect debugger"""
+debugger_check_bypass,detect debugger
+"""
                     archiveArtifacts artifacts: 'dast_results.csv'
                     echo "✅ Metrics ready for paper"
                 }
             }
         }
 
+        // ================= CLEANUP =================
         stage('Cleanup') {
             steps {
                 bat 'taskkill /F /IM qemu-system-x86_64.exe /T || echo already stopped'
