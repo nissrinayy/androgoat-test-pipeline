@@ -150,8 +150,9 @@ pipeline {
         }
 
 
+                
         // ================= DAST - MobSF + Frida =================
-        stage('DAST') {
+        stage('DAST - MobSF + Frida') {
             steps {
                 script {
 
@@ -160,7 +161,6 @@ pipeline {
 
                     echo "=== Starting Dynamic Analysis ==="
 
-                    // Start dynamic analysis
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
@@ -170,30 +170,35 @@ pipeline {
 
                     sleep 45
 
-                    echo "=== Instrumenting Frida (4 hooks exact) ==="
+                    echo "=== Instrumenting Frida with 4 hooks (api_monitor, ssl_pinning_bypass, root_bypass, debugger_check_bypass) ==="
 
-                    // Perbaikan utama: gunakan --data-urlencode supaya parameter terkirim benar
+                    // Cara paling reliable untuk MobSF Frida API
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
-                    --data-urlencode "hash=${env.APK_HASH}" ^
-                    --data-urlencode "default_hooks=api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass" ^
+                    -d "hash=${env.APK_HASH}" ^
+                    -d "default_hooks=api_monitor,ssl_pinning_bypass,root_bypass,debugger_check_bypass" ^
                     ${env.MOBSF_URL}/api/v1/frida/instrument
                     """
 
-                    sleep 18
+                    sleep 20
 
-                    echo "=== Triggering AndroGoat (lebih agresif) ==="
+                    echo "=== Triggering AndroGoat activities ==="
 
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'MainActivity already running'"
-                    sleep 10
-
-                    bat "adb shell input keyevent 82"
+                    // Launch beberapa activity vulnerable AndroGoat secara eksplisit
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'MainActivity running'"
+                    sleep 8
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.RootDetectionActivity || echo 'RootDetection started'"
+                    sleep 5
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureStorageSQLiteActivity || echo 'SQLite activity started'"
+                    sleep 5
+                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureStorageSharedPrefsActivity || echo 'SharedPrefs activity started'"
                     sleep 5
 
-                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 300 -v 1000 || echo 'Monkey finished'"
+                    // Monkey sebagai tambahan
+                    bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 250 -v 1200 || echo 'Monkey finished'"
 
-                    sleep 30   // beri waktu hooks menangkap aktivitas
+                    sleep 35
 
                     echo "=== Running TLS Tests ==="
 
@@ -223,7 +228,7 @@ pipeline {
 
                     sleep 15
 
-                    echo "=== Fetching DAST Report ==="
+                    echo "=== Fetching final DAST report ==="
 
                     def raw = bat(
                         script: """
@@ -239,9 +244,9 @@ pipeline {
                     if (json) {
                         writeFile file: 'dast_report.json', text: json
                         archiveArtifacts artifacts: 'dast_report.json, tls_report.json', allowEmptyArchive: true
-                        echo "✅ DAST finished - Check dast_report.json for apimon & frida_logs"
+                        echo "✅ DAST selesai. Silakan cek dast_report.json untuk apimon dan droidmon"
                     } else {
-                        echo "⚠️ Could not parse report"
+                        echo "⚠️ Gagal parse report JSON"
                     }
                 }
             }
