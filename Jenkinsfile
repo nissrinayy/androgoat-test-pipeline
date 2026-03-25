@@ -35,12 +35,6 @@ pipeline {
 
     stages {
 
-        // ================= CHECKOUT =================
-        stage('Checkout') {
-            steps {
-                git branch: 'main', url: 'hhttps://github.com/hnnayy/security-mobile'
-            }
-        }
 
         // ================= VALIDATE APK =================
         stage('Validate APK') {
