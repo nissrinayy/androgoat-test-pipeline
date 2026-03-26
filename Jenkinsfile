@@ -118,7 +118,8 @@ pipeline {
                 -avd "${env.AVD_NAME}" ^
                 -no-window -no-audio -gpu swiftshader_indirect -wipe-data
                 """
-                sleep 60
+                echo "⏳ Waiting for emulator to boot..."
+                bat 'timeout /t 60 /nobreak >nul'
                 bat "adb wait-for-device"
                 bat "adb shell getprop sys.boot_completed"
                 echo "✅ Emulator ready"
@@ -147,7 +148,7 @@ pipeline {
             }
         }
 
-        // ================= DAST - MobSF =================
+        // ================= DAST =================
         stage('DAST') {
             steps {
                 script {
@@ -159,38 +160,36 @@ pipeline {
                     --data "hash=${env.APK_HASH}" ^
                     ${env.MOBSF_URL}/api/v1/dynamic/start_analysis
                     """
-
-                    sleep 30
+                    bat 'timeout /t 30 /nobreak >nul'
 
                     echo "=== Triggering InsecureBankv2 activities ==="
+                    def activities = [
+                        ".LoginActivity",
+                        ".PostLogin",
+                        ".DoTransfer",
+                        ".ViewStatement",
+                        ".ChangePassword"
+                    ]
 
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.MainActivity || echo 'MainActivity started'"
-                    sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.HardcodeActivity || echo 'HardcodeActivity started'"
-                    sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage1Activity || echo 'IDS1 started'"
-                    sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.InsecureDataStorage2Activity || echo 'IDS2 started'"
-                    sleep 6
-                    bat "adb shell am start -n ${env.APP_PACKAGE}/.SQLInjectionActivity || echo 'SQLi started'"
+                    activities.each { act ->
+                        bat "adb shell am start -n ${env.APP_PACKAGE}/${act} || echo '${act} started'"
+                        bat 'timeout /t 6 /nobreak >nul'
+                    }
 
+                    echo "=== Monkey runner ==="
                     bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 200 -v 1000 || echo 'Monkey done'"
-
-                    sleep 45
+                    bat 'timeout /t 30 /nobreak >nul'
 
                     echo "=== Stopping Dynamic Analysis ==="
-
                     bat """
                     @curl -s -X POST ^
                     -H "Authorization: ${env.MOBSF_TOKEN}" ^
                     --data "hash=${env.APK_HASH}" ^
                     ${env.MOBSF_URL}/api/v1/dynamic/stop_analysis
                     """
-
-                    sleep 15
+                    bat 'timeout /t 15 /nobreak >nul'
 
                     echo "=== Fetching DAST Report ==="
-
                     def raw = bat(
                         script: """
                         @curl -s -X POST ^
@@ -233,6 +232,7 @@ debugger_check_bypass,detect debugger
         stage('Cleanup') {
             steps {
                 bat 'taskkill /F /IM qemu-system-x86_64.exe /T || echo already stopped'
+                bat 'taskkill /F /IM emulator.exe /T || echo already stopped'
             }
         }
     }
