@@ -118,10 +118,12 @@ pipeline {
                 -avd "${env.AVD_NAME}" ^
                 -no-window -no-audio -gpu swiftshader_indirect -wipe-data
                 """
-                echo "⏳ Waiting for emulator to boot..."
-                bat 'timeout /t 60 /nobreak >nul'
+
+                sleep 60   // ✅ pakai ini, JANGAN timeout
+
                 bat "adb wait-for-device"
                 bat "adb shell getprop sys.boot_completed"
+
                 echo "✅ Emulator ready"
             }
         }
