@@ -162,7 +162,7 @@ pipeline {
                     --data "hash=${env.APK_HASH}" ^
                     ${env.MOBSF_URL}/api/v1/dynamic/start_analysis
                     """
-                    bat 'timeout /t 30 /nobreak >nul'
+                    sleep 30
 
                     echo "=== Triggering InsecureBankv2 activities ==="
                     def activities = [
@@ -175,12 +175,12 @@ pipeline {
 
                     activities.each { act ->
                         bat "adb shell am start -n ${env.APP_PACKAGE}/${act} || echo '${act} started'"
-                        bat 'timeout /t 6 /nobreak >nul'
+                        sleep 30
                     }
 
                     echo "=== Monkey runner ==="
                     bat "adb shell monkey -p ${env.APP_PACKAGE} --throttle 200 -v 1000 || echo 'Monkey done'"
-                    bat 'timeout /t 30 /nobreak >nul'
+                    sleep 30
 
                     echo "=== Stopping Dynamic Analysis ==="
                     bat """
@@ -189,7 +189,7 @@ pipeline {
                     --data "hash=${env.APK_HASH}" ^
                     ${env.MOBSF_URL}/api/v1/dynamic/stop_analysis
                     """
-                    bat 'timeout /t 15 /nobreak >nul'
+                    sleep 15
 
                     echo "=== Fetching DAST Report ==="
                     def raw = bat(
