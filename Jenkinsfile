@@ -29,7 +29,7 @@ pipeline {
 
         // ================== InsecureBankv2 ==================
         APK_PATH     = "test-apk\\InsecureBankv2.apk"
-        APP_PACKAGE  = "insecurebankv2.dineshshetty"
+        APP_PACKAGE = "com.android.insecurebankv2"
 
         MOBSF_URL    = "http://localhost:8000"
         MOBSF_TOKEN  = "67f8dcdbaf63751750653685407053c3e1762a3394c5833de1d00379ca06c0fe"
