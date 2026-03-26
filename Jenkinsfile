@@ -233,8 +233,12 @@ debugger_check_bypass,detect debugger
         // ================= CLEANUP =================
         stage('Cleanup') {
             steps {
-                bat 'taskkill /F /IM qemu-system-x86_64.exe /T || echo already stopped'
-                bat 'taskkill /F /IM emulator.exe /T || echo already stopped'
+                echo "=== Cleaning up emulator processes ==="
+                bat """
+                tasklist | findstr /I emulator.exe && taskkill /F /IM emulator.exe /T || echo emulator already stopped
+                tasklist | findstr /I qemu-system-x86_64.exe && taskkill /F /IM qemu-system-x86_64.exe /T || echo qemu already stopped
+                adb kill-server || echo adb server stopped
+                """
             }
         }
     }
